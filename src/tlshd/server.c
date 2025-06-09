@@ -219,6 +219,7 @@ static void tlshd_tls13_server_x509_handshake(struct tlshd_handshake_parms *parm
 	gnutls_certificate_credentials_t xcred;
 	gnutls_session_t session;
 	char *cafile;
+	char *crlfile;
 	int ret;
 
 	ret = gnutls_certificate_allocate_credentials(&xcred);
@@ -238,6 +239,19 @@ static void tlshd_tls13_server_x509_handshake(struct tlshd_handshake_parms *parm
 		goto out_free_creds;
 	}
 	tlshd_log_debug("System trust: Loaded %d certificate(s).", ret);
+
+	if (tlshd_config_get_server_crl(&crlfile)) {
+		ret = gnutls_certificate_set_x509_crl_file(xcred, crlfile,
+							   GNUTLS_X509_FMT_PEM);
+		free(crlfile);
+		if (ret < 0 ) {
+			tlshd_log_gnutls_error(ret);
+			goto out_free_creds;
+		}
+		tlshd_log_debug("System CRL: Loaded %d CRL(s).", ret);
+	} else {
+		tlshd_log_debug("System CRL: No CRL file configured.");
+	}
 
 	if (!tlshd_x509_server_get_certs(parms)) {
 		goto out_free_creds;
