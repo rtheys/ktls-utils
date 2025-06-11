@@ -213,6 +213,39 @@ bool tlshd_config_get_client_truststore(char **bundle)
 }
 
 /**
+ * tlshd_config_get_client_crl - Get CRL for ClientHello from .conf
+ * @bundle: OUT: pathname to CRL
+ *
+ * Return values:
+ *   %false: pathname not retrieved
+ *   %true: pathname retrieved successfully; caller must free @bundle using free(3)
+ */
+bool tlshd_config_get_client_crl(char **bundle)
+{
+	GError *error = NULL;
+	gchar *pathname;
+
+	pathname = g_key_file_get_string(tlshd_configuration, "authenticate.client",
+					 "x509.crl", &error);
+	if (!pathname) {
+		g_error_free(error);
+		return false;
+	} else if (access(pathname, F_OK)) {
+		tlshd_log_debug("client x509.crl pathname \"%s\" is not accessible", pathname);
+		g_free(pathname);
+		return false;
+	}
+
+	*bundle = strdup(pathname);
+	g_free(pathname);
+	if (!*bundle)
+		return false;
+
+	tlshd_log_debug("Client x.509 crl is %s", *bundle);
+	return true;
+}
+
+/**
  * tlshd_config_get_client_certs - Get certs for ClientHello from .conf
  * @certs: OUT: in-memory certificates
  * @certs_len: IN: maximum number of certs to get, OUT: number of certs found
