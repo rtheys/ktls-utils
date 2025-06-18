@@ -43,13 +43,44 @@
 #include "tlshd.h"
 #include "netlink.h"
 
+static int tlshd_client_configure_credentials(gnutls_certificate_credentials_t
+					      xcred)
+{
+	char *cafile;
+	char *crlfile;
+	int ret;
+
+	if (tlshd_config_get_client_truststore(&cafile)) {
+		ret = gnutls_certificate_set_x509_trust_file(xcred, cafile,
+							     GNUTLS_X509_FMT_PEM);
+		free(cafile);
+	} else
+		ret = gnutls_certificate_set_x509_system_trust(xcred);
+	if (ret < 0) {
+		return ret;
+	}
+	tlshd_log_debug("System trust: Loaded %d certificate(s).", ret);
+
+	if (tlshd_config_get_client_crl(&crlfile)) {
+		ret = gnutls_certificate_set_x509_crl_file(xcred, crlfile,
+							   GNUTLS_X509_FMT_PEM);
+		free(crlfile);
+		if (ret < 0 ) {
+			return ret;
+		}
+		tlshd_log_debug("System CRL: Loaded %d CRL(s).", ret);
+	} else {
+		tlshd_log_debug("System CRL: No CRL file configured.");
+	}
+
+	return GNUTLS_E_SUCCESS;
+}
+
 static void tlshd_tls13_client_anon_handshake(struct tlshd_handshake_parms *parms)
 {
 	gnutls_certificate_credentials_t xcred;
 	gnutls_session_t session;
 	unsigned int flags;
-	char *cafile;
-	char *crlfile;
 	int ret;
 
 	ret = gnutls_certificate_allocate_credentials(&xcred);
@@ -66,29 +97,10 @@ static void tlshd_tls13_client_anon_handshake(struct tlshd_handshake_parms *parm
 	gnutls_certificate_set_flags(xcred,
 			GNUTLS_CERTIFICATE_SKIP_KEY_CERT_MATCH | GNUTLS_CERTIFICATE_SKIP_OCSP_RESPONSE_CHECK);
 
-	if (tlshd_config_get_client_truststore(&cafile)) {
-		ret = gnutls_certificate_set_x509_trust_file(xcred, cafile,
-							     GNUTLS_X509_FMT_PEM);
-		free(cafile);
-	} else
-		ret = gnutls_certificate_set_x509_system_trust(xcred);
-	if (ret < 0) {
+	ret = tlshd_client_configure_credentials(xcred);
+	if (ret != GNUTLS_E_SUCCESS) {
 		tlshd_log_gnutls_error(ret);
 		goto out_free_creds;
-	}
-	tlshd_log_debug("System trust: Loaded %d certificate(s).", ret);
-
-	if (tlshd_config_get_client_crl(&crlfile)) {
-		ret = gnutls_certificate_set_x509_crl_file(xcred, crlfile,
-							   GNUTLS_X509_FMT_PEM);
-		free(crlfile);
-		if (ret < 0 ) {
-			tlshd_log_gnutls_error(ret);
-			goto out_free_creds;
-		}
-		tlshd_log_debug("System CRL: Loaded %d CRL(s).", ret);
-	} else {
-		tlshd_log_debug("System CRL: No CRL file configured.");
 	}
 
 	flags = GNUTLS_CLIENT;
@@ -288,8 +300,6 @@ static void tlshd_tls13_client_x509_handshake(struct tlshd_handshake_parms *parm
 	gnutls_certificate_credentials_t xcred;
 	gnutls_session_t session;
 	unsigned int flags;
-	char *cafile;
-	char *crlfile;
 	int ret;
 
 	ret = gnutls_certificate_allocate_credentials(&xcred);
@@ -298,29 +308,10 @@ static void tlshd_tls13_client_x509_handshake(struct tlshd_handshake_parms *parm
 		return;
 	}
 
-	if (tlshd_config_get_client_truststore(&cafile)) {
-		ret = gnutls_certificate_set_x509_trust_file(xcred, cafile,
-							     GNUTLS_X509_FMT_PEM);
-		free(cafile);
-	} else
-		ret = gnutls_certificate_set_x509_system_trust(xcred);
-	if (ret < 0) {
+	ret = tlshd_client_configure_credentials(xcred);
+	if (ret != GNUTLS_E_SUCCESS) {
 		tlshd_log_gnutls_error(ret);
 		goto out_free_creds;
-	}
-	tlshd_log_debug("System trust: Loaded %d certificate(s).", ret);
-
-	if (tlshd_config_get_client_crl(&crlfile)) {
-		ret = gnutls_certificate_set_x509_crl_file(xcred, crlfile,
-							   GNUTLS_X509_FMT_PEM);
-		free(crlfile);
-		if (ret < 0 ) {
-			tlshd_log_gnutls_error(ret);
-			goto out_free_creds;
-		}
-		tlshd_log_debug("System CRL: Loaded %d CRL(s).", ret);
-	} else {
-		tlshd_log_debug("System CRL: No CRL file configured.");
 	}
 
 	if (!tlshd_x509_client_get_certs(parms))
@@ -517,7 +508,6 @@ static int tlshd_quic_client_set_x509_session(struct tlshd_quic_conn *conn)
 	gnutls_certificate_credentials_t cred;
 	gnutls_session_t session;
 	int ret = -EINVAL;
-	char *cafile;
 
 	if (conn->cert_req != TLSHD_QUIC_NO_CERT_AUTH) {
 		if (!tlshd_x509_client_get_certs(parms) || !tlshd_x509_client_get_privkey(parms)) {
@@ -528,14 +518,10 @@ static int tlshd_quic_client_set_x509_session(struct tlshd_quic_conn *conn)
 	ret = gnutls_certificate_allocate_credentials(&cred);
 	if (ret)
 		goto err;
-	if (tlshd_config_get_client_truststore(&cafile)) {
-		ret = gnutls_certificate_set_x509_trust_file(cred, cafile, GNUTLS_X509_FMT_PEM);
-		free(cafile);
-	} else
-		ret = gnutls_certificate_set_x509_system_trust(cred);
-	if (ret < 0)
-		goto err_cred;
-	tlshd_log_debug("System trust: Loaded %d certificate(s).", ret);
+
+	ret = tlshd_client_configure_credentials(cred);
+	if (ret != GNUTLS_E_SUCCESS)
+		goto err;
 
 	if (conn->cert_req == TLSHD_QUIC_NO_CERT_AUTH) {
 		gnutls_certificate_set_verify_flags(cred, GNUTLS_VERIFY_ALLOW_SIGN_RSA_MD2 |
