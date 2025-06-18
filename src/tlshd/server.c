@@ -207,6 +207,42 @@ certificate_error:
 	return GNUTLS_E_CERTIFICATE_ERROR;
 }
 
+static int tlshd_server_configure_credentials(gnutls_certificate_credentials_t
+					      xcred)
+{
+	char *crlfile;
+	char *cafile;
+	int ret;
+
+	if (tlshd_config_get_server_truststore(&cafile)) {
+		ret = gnutls_certificate_set_x509_trust_file(xcred, cafile,
+							     GNUTLS_X509_FMT_PEM);
+		free(cafile);
+	} else
+		ret = gnutls_certificate_set_x509_system_trust(xcred);
+	if (ret < 0) {
+		return ret;
+	}
+	tlshd_log_debug("System trust: Loaded %d certificate(s).", ret);
+
+	if (tlshd_config_get_server_crl(&crlfile)) {
+		ret = gnutls_certificate_set_x509_crl_file(xcred, crlfile,
+							   GNUTLS_X509_FMT_PEM);
+		free(crlfile);
+		if (ret < 0 ) {
+			return ret;
+		}
+		tlshd_log_debug("System CRL: Loaded %d CRL(s).", ret);
+	} else {
+		tlshd_log_debug("System CRL: No CRL file configured.");
+	}
+
+	gnutls_certificate_set_retrieve_function2(xcred,
+						  tlshd_x509_retrieve_key_cb);
+
+	return GNUTLS_E_SUCCESS;
+}
+
 static int tlshd_tls13_server_x509_verify_function(gnutls_session_t session)
 {
 	struct tlshd_handshake_parms *parms = gnutls_session_get_ptr(session);
@@ -218,8 +254,6 @@ static void tlshd_tls13_server_x509_handshake(struct tlshd_handshake_parms *parm
 {
 	gnutls_certificate_credentials_t xcred;
 	gnutls_session_t session;
-	char *cafile;
-	char *crlfile;
 	int ret;
 
 	ret = gnutls_certificate_allocate_credentials(&xcred);
@@ -228,29 +262,10 @@ static void tlshd_tls13_server_x509_handshake(struct tlshd_handshake_parms *parm
 		return;
 	}
 
-	if (tlshd_config_get_server_truststore(&cafile)) {
-		ret = gnutls_certificate_set_x509_trust_file(xcred, cafile,
-							     GNUTLS_X509_FMT_PEM);
-		free(cafile);
-	} else
-		ret = gnutls_certificate_set_x509_system_trust(xcred);
-	if (ret < 0) {
+	ret = tlshd_server_configure_credentials(xcred);
+	if (ret != GNUTLS_E_SUCCESS) {
 		tlshd_log_gnutls_error(ret);
 		goto out_free_creds;
-	}
-	tlshd_log_debug("System trust: Loaded %d certificate(s).", ret);
-
-	if (tlshd_config_get_server_crl(&crlfile)) {
-		ret = gnutls_certificate_set_x509_crl_file(xcred, crlfile,
-							   GNUTLS_X509_FMT_PEM);
-		free(crlfile);
-		if (ret < 0 ) {
-			tlshd_log_gnutls_error(ret);
-			goto out_free_creds;
-		}
-		tlshd_log_debug("System CRL: Loaded %d CRL(s).", ret);
-	} else {
-		tlshd_log_debug("System CRL: No CRL file configured.");
 	}
 
 	if (!tlshd_x509_server_get_certs(parms)) {
@@ -259,8 +274,6 @@ static void tlshd_tls13_server_x509_handshake(struct tlshd_handshake_parms *parm
 	if (!tlshd_x509_server_get_privkey(parms)) {
 		goto out_free_creds;
 	}
-	gnutls_certificate_set_retrieve_function2(xcred,
-						  tlshd_x509_retrieve_key_cb);
 
 	ret = gnutls_init(&session, GNUTLS_SERVER);
 	if (ret != GNUTLS_E_SUCCESS) {
@@ -479,7 +492,6 @@ static int tlshd_quic_server_set_x509_session(struct tlshd_quic_conn *conn)
 	gnutls_datum_t ticket_key;
 	gnutls_session_t session;
 	int ret = -EINVAL;
-	char *cafile;
 
 	if (!tlshd_x509_server_get_certs(parms) || !tlshd_x509_server_get_privkey(parms)) {
 		tlshd_log_error("cert/privkey get error %d", -ret);
@@ -489,17 +501,10 @@ static int tlshd_quic_server_set_x509_session(struct tlshd_quic_conn *conn)
 	ret = gnutls_certificate_allocate_credentials(&cred);
 	if (ret)
 		goto err;
-	if (tlshd_config_get_server_truststore(&cafile)) {
-		ret = gnutls_certificate_set_x509_trust_file(cred, cafile,
-							     GNUTLS_X509_FMT_PEM);
-		free(cafile);
-	} else
-		ret = gnutls_certificate_set_x509_system_trust(cred);
-	if (ret < 0)
-		goto err_cred;
-	tlshd_log_debug("System trust: Loaded %d certificate(s).", ret);
 
-	gnutls_certificate_set_retrieve_function2(cred, tlshd_x509_retrieve_key_cb);
+	ret = tlshd_server_configure_credentials(cred);
+	if (ret != GNUTLS_E_SUCCESS)
+		goto err;
 
 	gnutls_certificate_set_verify_function(cred, tlshd_quic_server_x509_verify_function);
 
